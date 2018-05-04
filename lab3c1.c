@@ -4,8 +4,8 @@
 #define H 1024
 #define W 1024
 #define C 3
-#define Ir_index(c,j,i) (c * (H * W) + (j * W) + H)
-#define O_index(c,j,i) (c * (H * W) + (j * W) + H)
+#define Ir_index(c,j,i) (c * (H * W) + (j * W) + i)
+#define O_index(c,j,i) (c * (H * W) + (j * W) + i)
 #define size (H * W * C)
 #define master 0
 
@@ -39,8 +39,8 @@ int main(int argc,char **argv)
                  for(int x = 0 ; x < W ; x++)
                   for(int y = 0 ; y < H ; y++)
                         {
-                                Ir_recv[Ir_index(c,x,y)] = 0.0;
-				O[O_index(c,x,y)] = 0.0;
+                                Ir_recv[Ir_index(c,x,y)] = (double)0.0;
+				O[O_index(c,x,y)] = (double)0.0;
                         }
 
 
@@ -53,10 +53,7 @@ int main(int argc,char **argv)
 	                 for(int x = 0 ; x < W ; x++)
         	          for(int y = 0 ; y < H ; y++)
                           {
-				if(c == 1 && x == 102 && y == 100) printf("Ir_recv is %d %f at C1 \n",i,Ir_recv[Ir_index(1,102,100)] );
                                 O[O_index(c,x,y)] += Ir_recv[Ir_index(c,x,y)];
-                                //O[O_index(c,x,y)] += i + c * (x + y);
-				
                           }
 		}
 
@@ -64,12 +61,14 @@ int main(int argc,char **argv)
                  for(int x = 0 ; x < W ; x++)
                   for(int y = 0 ; y < H ; y++)
                   {
-			O[O_index(c,x,y)] /= world_size;
+			O[O_index(c,x,y)] = O[O_index(c,x,y)] / (double) (world_size - 1);
 			checksum += O[O_index(c,x,y)];
                   }
 
-		printf("Checksum in C1 is %f \n",checksum);
-		printf("O at C1 is %f \n", O[O_index(1,102,100)] );
+		printf("Checksum in C1 is %4.3lf \n",checksum);
+
+		free(O);
+		free(Ir_recv);
 
 	}
 	else
@@ -81,21 +80,21 @@ int main(int argc,char **argv)
 		 for(int x = 0 ; x < W ; x++)
 		  for(int y = 0 ; y < H ; y++)
 			{
-				Ir[Ir_index(c,x,y)] = world_rank + c * (x + y);
-				if(c == 1 && x == 102 && y == 100) { printf("Ir is %d %f at C1 \n",world_rank,Ir[Ir_index(1,102,100)] ); }
+				Ir[Ir_index(c,x,y)] = (double) (world_rank + c * (x + y));
 			}
 
 		MPI_Isend(Ir,size,MPI_DOUBLE,master,tag,MPI_COMM_WORLD,&request_worker);
 		MPI_Wait(&request_worker, &status);
 	}	
 
+	free(Ir);
+
 	MPI_Finalize();
 
 }
 
 /*
-int C2()
-{
+
 	int world_size,world_rank;
         MPI_Comm_size(MPI_COMM_WORLD,&world_size);
         MPI_Comm_rank(MPI_COMM_WORLD,&world_rank);
@@ -143,5 +142,4 @@ int C2()
                         }
 	printf("O at C2 is %f \n", O[O_index(1,102,100)] );
 	printf("checksum in C2 is %f \n",checksum);
-}
 */
