@@ -148,13 +148,30 @@ def partition_dataset(dataset):
 
 	return train_set, bsz
 
-def average_gradients(net):
-	size = float(wsize)
+def apply_gradients(net):
+	
+	params = torch.LongTensor([])
+	new_params = torch.zeros(3413521)
+	if(rank == 0):
+		for param in net.parameters():
+		#	flat_para = param.grad.data.view(-1)
+		#	params = torch.cat((params,flat_para.long()),0)
+		
+			print("sending :")
+			print(param.grad.data)
+			dist.send(tensor=param.grad.data, dst=paraserv_rank)
 
-	for param in net.parameters():
-		dist.all_reduce(param.grad.data, op=dist.reduce_op.SUM,group=worker_group)
-		param.grad.data /= size
 
+	if(rank == paraserv_rank):
+		for param in net.parameters():
+                #       flat_para = param.grad.data.view(-1)
+                #       params = torch.cat((params,flat_para.long()),0)
+
+                        print("recieving :")
+                        dist.recv(tensor=param.grad.data, src=0)
+                        print(param.grad.data)
+		
+	
 
 def run():
 
@@ -177,7 +194,6 @@ def run():
 
 	tstart = time.monotonic()
 	for epoch in range(5):
-		print("epoch")
 		if(rank != paraserv_rank):
 			for i,data in enumerate(train_load,0):
 			
@@ -189,12 +205,12 @@ def run():
 				output = model(inputs)
 				loss = criterion(output, labels)
 				loss.backward()
-				average_gradients(model)
+				apply_gradients(model)
 				optimizer.step()
 				running_loss += loss.item()
 				num_minibatch += 1
 		else:
-				average_gradients(model)
+				apply_gradients(model)
 
 	if(rank != paraserv_rank): running_loss /= num_minibatch
 	tend = time.monotonic()
