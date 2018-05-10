@@ -18,8 +18,7 @@ rank = dist.get_rank()
 wsize = dist.get_world_size()
 seed = 123
 torch.manual_seed(seed)
-paraserv_rank = 4
-worker_group = dist.new_group([0,1,2,3])
+paraserv_rank = wsize - 1
 #dataloader_io = 0
 #dataloader_preprocessing = 0
 #loadbatch_time = 0
@@ -137,7 +136,7 @@ class DataPartitioner(object):
 
 """ Partitioning Kaggle Amazon """
 def partition_dataset(dataset):
-	size = dist.get_world_size() - 1
+	size = dist.get_world_size() 
 	bsz = 100
 	partition_sizes = [1.0 / size for _ in range(size)]
 	partition = DataPartitioner(dataset, partition_sizes)
@@ -148,40 +147,44 @@ def partition_dataset(dataset):
 
 	return train_set, bsz
 
-def apply_gradients(net):
+def apply_gradients(net,optimizer):
 	
-	params = torch.LongTensor([])
-	new_params = torch.zeros(3413521)
-	if(rank == 0):
+	if(rank != paraserv_rank):
 		for param in net.parameters():
-		#	flat_para = param.grad.data.view(-1)
-		#	params = torch.cat((params,flat_para.long()),0)
-		
-			print("sending :")
-			print(param.grad.data)
+			#print("sending from ", rank)
 			dist.send(tensor=param.grad.data, dst=paraserv_rank)
 
+		for param in net.parameters():
+                        #print("recieving from ", rank)
+                        dist.recv(tensor=param, src=paraserv_rank)
 
 	if(rank == paraserv_rank):
-		for param in net.parameters():
-                #       flat_para = param.grad.data.view(-1)
-                #       params = torch.cat((params,flat_para.long()),0)
+		for i in range(wsize - 1):
+			sender = None
+			for param in net.parameters():
+				#print("recieving gradients:")
+				if(sender == None):
+					sender = dist.recv(tensor=param.grad.data)
+				else:
+					dist.recv(tensor=param.grad.data,src=sender)
 
-                        print("recieving :")
-                        dist.recv(tensor=param.grad.data, src=0)
-                        print(param.grad.data)
+			optimizer.step()
+
+			for param in net.parameters():
+				#print("sending parameters")
+				dist.send(tensor=param, dst=sender)
 		
 	
 
 def run():
 
-	if(rank != paraserv_rank):
+	#if(rank != paraserv_rank):
 
-		train_dataset = LandmarksDataset(csv_file='/home/atm423/CSCI-GA.3033-023/kaggleamazon/train.csv',
-				root_dir='/home/atm423/CSCI-GA.3033-023/kaggleamazon/train-jpg',
-				Transform=transforms.Compose([transforms.Resize((32,32)),transforms.ToTensor()]))
+	train_dataset = LandmarksDataset(csv_file='/home/atm423/CSCI-GA.3033-023/kaggleamazon/train.csv',
+			root_dir='/home/atm423/CSCI-GA.3033-023/kaggleamazon/train-jpg',
+			Transform=transforms.Compose([transforms.Resize((32,32)),transforms.ToTensor()]))
 
-		train_load, dw = partition_dataset(train_dataset)
+	train_load, dw = partition_dataset(train_dataset)
 
 	model = Net()
 	model.dummy_backprop()
@@ -194,7 +197,6 @@ def run():
 
 	tstart = time.monotonic()
 	for epoch in range(5):
-		if(rank != paraserv_rank):
 			for i,data in enumerate(train_load,0):
 			
 				inputs,labels = data["image"],data["label"]
@@ -205,27 +207,32 @@ def run():
 				output = model(inputs)
 				loss = criterion(output, labels)
 				loss.backward()
-				apply_gradients(model)
-				optimizer.step()
+
+				if(paraserv_rank == rank): 
+					optimizer.step()
+
+				apply_gradients(model,optimizer)
 				running_loss += loss.item()
 				num_minibatch += 1
-		else:
-				apply_gradients(model)
+				
+			torch.distributed.barrier()
+	
 
-	if(rank != paraserv_rank): running_loss /= num_minibatch
+			if(rank == paraserv_rank): 
+				running_loss /= num_minibatch
+				print(running_loss)
+
 	tend = time.monotonic()
 
 	epoch_time = tend - tstart
 
-	if(rank != paraserv_rank):
-		dwlw = torch.zeros(1)
-		dwlw[0] = dw * running_loss
-		dist.all_reduce(dwlw, op=dist.reduce_op.SUM,group=worker_group)
-		dwlw[0] /= len(train_dataset)
+	dwlw = torch.zeros(1)
+	dwlw[0] = dw * running_loss
+	dist.all_reduce(dwlw, op=dist.reduce_op.SUM)
+	dwlw[0] /= len(train_dataset)
 
-	if rank == 0:
-        	print('finished training')
-        	print("C3 loss : %f, avg epoch_time : %f\n" % (dwlw[0], epoch_time / 5))
+	print('finished training')
+	print("C4 loss : %f, avg epoch_time : %f\n" % (dwlw[0], epoch_time / 5))
 
 if __name__ == "__main__":
     run()
